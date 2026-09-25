@@ -11,6 +11,22 @@ is ours; upstream never touches this folder, so pulling Lara's updates cannot co
 | `dannce_to_slp.py` | Converts one camera view of an sDANNCE `save_data_AVG0.mat` (3D poses, mm) into a per-camera 2D `.slp` the labeler can load next to that camera's video, using the cage's `calibration.json`. |
 | `import_social_window.py` | Sets a clip's *social window* (frames where the second rat is in the arena) from the QC spreadsheet, through a running labeler's HTTP API. |
 
+## The pixel scale (px/cm) for HiDRA is measured automatically
+
+HiDRA works in centimetres, so it needs each camera's px/cm. `dannce_to_slp.py` measures it while
+converting (true 3D size in mm vs. projected size in pixels, over long head/trunk segments of the whole
+session) and writes `<poses>.slp.scale.json` next to the `.slp`. **Keep the two files together** when you
+copy poses between machines. The labeler then fills the px/cm box by itself:
+
+- a value you type always wins; clear the box to go back to the automatic one;
+- a video that is a uniformly resized copy gets the scale multiplied by the same factor;
+- a video of a different shape (e.g. cropped) is refused with the reason shown, never guessed;
+- no sidecar → nothing is guessed, and HiDRA still asks for the number.
+
+To measure it for poses you already converted: `python dannce_to_slp.py <cage_dir> --camera CameraN --out
+<poses>.slp --scale-only`. It is one number per camera, so it is approximate: the sidecar records the
+spread (`iqr`), which is wide because a tilted camera sees the arena at different scales near and far.
+
 ## Known issue: joints come out as `kp00 … kp22`
 
 `dannce_to_slp.py` writes anonymous node names. The labeler needs real names to compute heading/facing/
