@@ -3925,11 +3925,12 @@ el("labelStatsBtn").onclick = openLabelStats;
 el("labelStatsClose").onclick = () => el("labelStatsPanel").classList.remove("on");
 el("featDiffBtn").onclick = openFeatureDiff;
 el("featDiffClose").onclick = () => el("featDiffPanel").classList.remove("on");
-function replayCandidate() {   // re-watch the bout under review from its start
+function replayCandidate() {   // re-watch the bout under review, honoring any start/end trim
   if (!reviewCurrent) return;
+  const t = reviewTrim || reviewCurrent;
   evCandReplays++;                                  // replays ride along on the decision event
-  logEvent("candidate_replay", { behavior_id: reviewCurrent.bid, start: reviewCurrent.s, end: reviewCurrent.e, n: evCandReplays });
-  playBout(reviewCurrent.s, reviewCurrent.e);
+  logEvent("candidate_replay", { behavior_id: reviewCurrent.bid, start: t.s, end: t.e, n: evCandReplays });
+  playBout(t.s, t.e);
 }
 el("rvReplay").onclick = replayCandidate;
 el("rvYes").onclick = acceptCandidate;
