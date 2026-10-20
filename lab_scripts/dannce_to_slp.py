@@ -37,6 +37,15 @@ SIDECAR_SUFFIX = ".scale.json"
 RAT23_SEGMENTS = [(0, 6), (0, 5), (3, 6), (3, 5)]
 RAT23_N_KEYPOINTS = 23
 
+# rat23 node names in order. Without real names the labeler drops its heading and social features.
+RAT23_NODE_NAMES = [
+    "nose", "ear_left", "ear_right", "neck", "body_center", "spine_lower", "tail_base",
+    "shoulder_left", "elbow_left", "wrist_left", "forepaw_left",
+    "shoulder_right", "elbow_right", "wrist_right", "forepaw_right",
+    "hip_left", "knee_left", "ankle_left", "hindpaw_left",
+    "hip_right", "knee_right", "ankle_right", "hindpaw_right",
+]
+
 
 def project_camera(pts3d_flat: np.ndarray, cam_params: dict) -> np.ndarray:
     K = np.array(cam_params["camera_matrix"], dtype=np.float64)
@@ -150,7 +159,8 @@ def main():
         return
 
     tracks_arr = np.concatenate([uv, p_max[..., None]], axis=-1).astype("float32")  # (F,T,N,3)
-    skeleton = sio.Skeleton(nodes=[f"kp{i:02d}" for i in range(N)], name="dannce23")
+    node_names = RAT23_NODE_NAMES if N == RAT23_N_KEYPOINTS else [f"kp{i:02d}" for i in range(N)]
+    skeleton = sio.Skeleton(nodes=node_names, name="dannce23")
     tracks = [sio.Track(name=f"rat{i}") for i in range(T)]
 
     labels = sio.Labels.from_numpy(
