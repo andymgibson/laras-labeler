@@ -1,8 +1,7 @@
 # lab_scripts — Kennedy lab tools for the sDANNCE / rat social-behavior data
 
-This repo is a copy of [talmolab/laras-labeler](https://github.com/talmolab/laras-labeler) (Lara Scaria's
-human-in-the-loop labeler, BSD-3-Clause) plus the lab's own changes. Everything under `lab_scripts/`
-is ours; upstream never touches this folder, so pulling Lara's updates cannot conflict with it.
+Scripts and notes from the Kennedy lab's use of the labeler on sDANNCE rat social-behavior data. The
+labeler changes listed under "What we changed in the labeler itself" are in `src/`.
 
 ## Scripts
 
@@ -37,8 +36,6 @@ spread (`iqr`), which is wide because a tilted camera sees the arena at differen
   writes are restricted to the frames where a second animal is actually present; the GUI dims the rest.
 - Adding a video with no poses (labeling-only mode) no longer fails.
 - `HIDRA_GPU=<n>` picks the GPU for HiDRA jobs. Set it when you start the labeler.
-- `?ft_mode=head` (or `tail`, `embedding`) on the train route picks the fine-tune mode. Later re-tunes
-  keep using the mode of the last successful run.
 - **Train on** (menu next to the HiDRA review rate): every frame, inside the social window, or
   reviewed frames only. See below.
 - **Hold this clip out of training** (checkbox next to ⚙ Train). Use it for test videos. The clip keeps
@@ -180,17 +177,6 @@ dropped about 20 features unless you renamed the nodes by hand.
 **The trim handle sat one frame past the playhead.** Fixed 2026-10-05.
 When you dragged the end of a candidate, its handle was drawn one frame to the right of the playhead.
 Only the drawing was off. The saved labels were always right.
-
-## Pulling Lara's updates
-
-`upstream` points at talmolab/laras-labeler (push is disabled on purpose).
-
-```bash
-git fetch upstream
-git checkout -b sync-upstream
-git merge upstream/main          # resolve conflicts if any, then run the labeler and try it
-git push -u origin sync-upstream # open a pull request into main
-```
 
 ## Data
 
