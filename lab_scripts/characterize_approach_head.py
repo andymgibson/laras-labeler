@@ -9,7 +9,8 @@ Outputs (in --out, default <project>/analysis/<timestamp>/):
   roc_curves.png            ROC per video
   pr_curves.png             precision-recall per video, with the live threshold marked
   operating_point.png       precision and recall at the live threshold
-  precision_over_time.png   rolling review precision with fine-tune times marked
+  precision_over_time.png   rolling review precision with fine-tune times marked. Use --since to
+                            leave out old review rounds.
   summary.csv               per-video and pooled metrics
 
     python lab_scripts/characterize_approach_head.py ~/my-projects/approach_defs --behavior 0 --track 1
@@ -198,10 +199,10 @@ def plot_pr(results, thr, out):
         ax.set_title(f"{r['video_id']}\nAP {r['ap']:.2f}", fontsize=10, pad=6)
         ax.set_xlabel("recall", fontsize=8.5)
         ax.set_ylabel("precision", fontsize=8.5)
-    axes[0].legend(loc="lower left", handletextpad=0.3)
-    fig.suptitle("Precision-recall per video (dashed line is the positive rate, what chance would get)",
-                 fontsize=13, fontweight="bold", y=1.0)
-    fig.tight_layout(rect=[0, 0, 1, 0.94], h_pad=2.6, w_pad=1.8)
+    fig.suptitle(f"Precision-recall per video\nBlack dot: the live threshold ({thr:.2f}). "
+                 "Dashed line: the positive rate, what chance would get.",
+                 fontsize=12, fontweight="bold", y=1.0)
+    fig.tight_layout(rect=[0, 0, 1, 0.91], h_pad=2.6, w_pad=1.8)
     fig.savefig(out, dpi=200, bbox_inches="tight")
     plt.close(fig)
 
@@ -238,16 +239,27 @@ def plot_operating_point(results, thr, out):
     plt.close(fig)
 
 
-def plot_precision_over_time(proj: Path, bid: int, track: int, video_order: list, out):
+def plot_precision_over_time(proj: Path, bid: int, track: int, video_order: list, out, since=None):
+    local = datetime.now().astimezone().tzinfo
+    since = pd.Timestamp(since).tz_localize(local) if since else None
+
+    def to_local(ts):   # event times are stored in UTC
+        t = pd.to_datetime(ts, utc=True)
+        return t.dt.tz_convert(local) if isinstance(t, pd.Series) else t.tz_convert(local)
+
     ev = load_events(proj)
     dec = [e for e in ev if e.get("type") in ("candidate_accept", "candidate_reject")
           and e.get("behavior_id") == bid and e.get("track") == track and e.get("t_srv")]
-    trains = sorted(e["t_srv"] for e in ev if e.get("type") == "job_done" and e.get("kind") == "train"
-                    and e.get("status") == "done")
+    trains = [to_local(e["t_srv"]) for e in ev if e.get("type") == "job_done" and e.get("kind") == "train"
+              and e.get("status") == "done"]
+    if since is not None:
+        dec = [e for e in dec if to_local(e["t_srv"]) >= since]
+        trains = [t for t in trains if t >= since]
     if not dec:
         return False
+    trains = sorted(t.tz_localize(None) for t in trains)
     df = pd.DataFrame(dec)
-    df["t"] = pd.to_datetime(df["t_srv"])
+    df["t"] = to_local(df["t_srv"]).dt.tz_localize(None)
     df = df.sort_values("t").reset_index(drop=True)
     df["accept"] = (df["type"] == "candidate_accept").astype(int)
     win = max(10, min(30, len(df) // 6 or 10))
@@ -261,21 +273,17 @@ def plot_precision_over_time(proj: Path, bid: int, track: int, video_order: list
                   label=vid, zorder=3)
     ax.plot(df["t"], df["rolling"], color=INK, lw=2.2, zorder=5,
            label=f"rolling precision (window={win})")
-    for t in trains:
-        ax.axvline(pd.to_datetime(t), color=GOOD, lw=1.2, ls=(0, (3, 2)), alpha=0.8, zorder=1)
-    if trains:
-        ax.axvline(pd.to_datetime(trains[0]), color=GOOD, lw=1.2, ls=(0, (3, 2)), alpha=0.8,
-                  label="fine-tune completed")
+    for i, t in enumerate(trains):
+        ax.axvline(t, color=GOOD, lw=1.2, ls=(0, (3, 2)), alpha=0.8, zorder=1,
+                   label="fine-tune completed" if i == 0 else None)
     ax.set_ylim(-0.08, 1.08)
     ax.set_yticks([0, 0.25, 0.5, 0.75, 1.0])
     ax.set_ylabel("accepted (1) or rejected (0), jittered")
-    ax.set_xlabel("review decision, in time order")
+    ax.set_xlabel("time of review decision (local time)")
     ax.grid(True, axis="y", lw=0.6, alpha=0.6)
-    ax.set_title("Review precision over time, across every video and review round",
-                fontsize=12, fontweight="bold", pad=10)
-    handles, labels = ax.get_legend_handles_labels()
-    seen = dict(zip(labels, handles))
-    ax.legend(seen.values(), seen.keys(), loc="lower left", ncol=2, framealpha=0.0)
+    when = f" since {since:%Y-%m-%d %H:%M}" if since is not None else ", all time"
+    ax.set_title(f"Review precision over time{when}", fontsize=12, fontweight="bold", pad=10)
+    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), title="video", title_fontsize=9)
     fig.autofmt_xdate(rotation=20, ha="right")
     fig.tight_layout()
     fig.savefig(out, dpi=200, bbox_inches="tight")
@@ -289,6 +297,8 @@ def main():
     ap.add_argument("--behavior", type=int, required=True)
     ap.add_argument("--track", type=int, default=1)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--since", default=None,
+                    help="only plot review decisions after this local time, e.g. '2026-10-09 17:40'")
     a = ap.parse_args()
 
     proj = Path(a.project).expanduser()
@@ -315,7 +325,7 @@ def main():
     plot_pr(results, thr, out / "pr_curves.png")
     plot_operating_point(results, thr, out / "operating_point.png")
     had_time = plot_precision_over_time(proj, a.behavior, a.track, [r["video_id"] for r in results],
-                                       out / "precision_over_time.png")
+                                       out / "precision_over_time.png", a.since)
 
     rows = []
     for r in results:
@@ -338,8 +348,10 @@ def main():
            "specificity", "f1", "auroc", "ap", "n_true_bouts", "bout_recall"]
     with pd.option_context("display.width", 160, "display.float_format", "{:.3f}".format):
         print(df[[c for c in cols if c in df.columns]].to_string(index=False))
-    print(f"\nwrote {out}/{{roc_curves,pr_curves,operating_point" +
-         (",precision_over_time" if had_time else "") + "}}.png and summary.csv")
+    print(f"\nWrote roc_curves, pr_curves, operating_point" + (" and precision_over_time" if had_time else "")
+          + f" (.png) and summary.csv to {out}")
+    if not had_time:
+        print("No review decisions in the chosen time range, so there is no precision_over_time plot.")
     base_rate = pooled["n_pos"] / max(1, pooled["n_pos"] + pooled["n_neg"])
     print(f"\nPooled positive rate on labeled frames is {base_rate:.1%}. At this imbalance accuracy says "
          f"little. Use precision, recall and AUROC.")

@@ -5,14 +5,11 @@
 """Set a laras-labeler clip's social window (the frame range the second rat is actually in the
 arena) from Hannah's QC spreadsheet, via the running labeler's HTTP API.
 
-`asd_session_qc_social.xlsx` has two sheets: the main `asd_session_qc_social` sheet (day, cage,
-animal_id, entry_time/exit_time in MINUTES, ...) and `Sheet1`, which has the same entry_time/
-exit_time plus precomputed `start_frame`/`end_frame`. The two sheets share no explicit key column,
-but are row-aligned -- verified by cross-checking entry_time/exit_time (duplicated in both) match
-row-for-row. We use `start_frame`/`end_frame` from Sheet1 AS GIVEN rather than recomputing frame
-numbers from entry_time/exit_time x fps: cross-checked against Camera1/cage1RB/day1's own
-frametimes.npy and a constant-fps conversion doesn't land on the same frame numbers (capture isn't
-perfectly constant-rate), so the sheet's own precomputed numbers are the more trustworthy source.
+Only the main `asd_session_qc_social` sheet is used. Its entry_time and exit_time are
+MINUTES:SECONDS written as a number, so 9.41 means 9 min 41 s (and 10.4 means 10 min 40 s). They
+are not decimal minutes. Frames = (minutes x 60 + seconds) x fps. At 50 fps this lands exactly on
+the `partner_present` record in ugne_clusters for every session checked (2026-10-23).
+`Sheet1` is ignored. Its start_frame and end_frame are empty for most sessions.
 
 Video ids in this project are just the source filename stem (e.g. "0" for .../Camera1/0.mp4), not
 descriptive, so this script does not try to auto-match a project's clips to a spreadsheet row --
@@ -48,19 +45,21 @@ DEFAULT_XLSX = ("/Volumes/kennedy/DATA/GLOBUS_SYNC/Hannah_data/ASD_Social_Photom
                 "asd_session_qc_social.xlsx")
 
 
-def load_sessions(xlsx_path: str) -> pd.DataFrame:
-    main = pd.read_excel(xlsx_path, sheet_name="asd_session_qc_social")
-    frames = pd.read_excel(xlsx_path, sheet_name="Sheet1")
-    if len(main) != len(frames):
-        sys.exit(f"sheet row-count mismatch ({len(main)} vs {len(frames)}) -- "
-                 f"row-position join is no longer safe, this script needs updating")
-    mismatched = (main["entry_time"].round(2) != frames["entry_time"].round(2)).sum()
-    if mismatched:
-        sys.exit(f"{mismatched} row(s) where the two sheets' entry_time disagree -- "
-                 f"row-position join is no longer safe, this script needs updating")
-    df = main.copy()
-    df["start_frame"] = frames["start_frame"]
-    df["end_frame"] = frames["end_frame"]
+def mmss_seconds(t) -> float | None:
+    """9.41 -> 581 s. The sheet writes minutes:seconds as minutes.seconds."""
+    if pd.isna(t):
+        return None
+    minutes = int(t)
+    seconds = round((float(t) - minutes) * 100)
+    if not 0 <= seconds < 60:
+        sys.exit(f"time {t!r} is not minutes.seconds (seconds part {seconds})")
+    return minutes * 60 + seconds
+
+
+def load_sessions(xlsx_path: str, fps: float) -> pd.DataFrame:
+    df = pd.read_excel(xlsx_path, sheet_name="asd_session_qc_social")
+    for col, out in (("entry_time", "start_frame"), ("exit_time", "end_frame")):
+        df[out] = [None if s is None else int(round(s * fps)) for s in map(mmss_seconds, df[col])]
     return df
 
 
@@ -89,9 +88,10 @@ def main() -> None:
     ap.add_argument("--pid", help="labeler project id to set the window on (omit to just print the row)")
     ap.add_argument("--vid", help="labeler video id within --pid")
     ap.add_argument("--url", default="http://127.0.0.1:8760", help="labeler base URL (default %(default)s)")
+    ap.add_argument("--fps", type=float, default=50.0, help="video frame rate (default %(default)s)")
     args = ap.parse_args()
 
-    df = load_sessions(args.xlsx)
+    df = load_sessions(args.xlsx, args.fps)
 
     if args.list:
         cols = ["day", "cage", "animal_id", "entry_time", "exit_time", "start_frame", "end_frame", "flags"]
@@ -110,13 +110,15 @@ def main() -> None:
     row = rows.iloc[0]
 
     if pd.isna(row["start_frame"]) or pd.isna(row["end_frame"]):
-        sys.exit(f"day={args.day} cage={args.cage}: no start_frame/end_frame in the sheet "
-                 f"(entry_time={row['entry_time']!r}, exit_time={row['exit_time']!r}) — "
-                 f"this looks like a session with no social window, not something to import")
+        sys.exit(f"day={args.day} cage={args.cage}: no entry_time/exit_time in the sheet "
+                 f"(entry_time={row['entry_time']!r}, exit_time={row['exit_time']!r}). "
+                 f"This looks like a session with no social window, not something to import")
 
     s, e = int(row["start_frame"]), int(row["end_frame"])
+    em, es = divmod(int(mmss_seconds(row["entry_time"])), 60)
+    xm, xs = divmod(int(mmss_seconds(row["exit_time"])), 60)
     print(f"day={args.day} cage={args.cage} animal_id={row.get('animal_id')}: "
-         f"entry={row['entry_time']:.2f}min exit={row['exit_time']:.2f}min -> frames [{s}, {e})")
+          f"entry {em}:{es:02d} exit {xm}:{xs:02d} -> frames [{s}, {e})")
     if row.get("flags") and not pd.isna(row.get("flags")):
         print(f"  NOTE flags={row['flags']!r} — check this session before trusting it")
 

@@ -8,11 +8,11 @@ is ours; upstream never touches this folder, so pulling Lara's updates cannot co
 
 | script | what it does |
 |---|---|
-| `dannce_to_slp.py` | Converts one camera view of an sDANNCE `save_data_AVG0.mat` (3D poses, mm) into a per-camera 2D `.slp` the labeler can load next to that camera's video, using the cage's `calibration.json`. |
+| `dannce_to_slp.py` | Converts one camera view of an sDANNCE `save_data_AVG0.mat` (3D poses, mm) into a per-camera 2D `.slp` the labeler can load next to that camera's video, using the cage's `calibration.json`. It reads `sDANNCE/predict02` when that folder exists, else `predict01`. Some sessions have both, and there `predict01` stops at frame 60000. |
 | `import_social_window.py` | Sets a clip's *social window* (frames where the second rat is in the arena) from the QC spreadsheet, through a running labeler's HTTP API. |
 | `review_stats.py` | Precision of a head's proposals from your accept and reject decisions in review. |
 | `characterize_approach_head.py` | ROC, precision-recall and review precision over time for every video in a project, scored against that project's own labels. |
-| `compare_to_handlabels.py` | Scores one video's predictions against hand labels kept in a different project. Add `--full-coverage` when every real bout was painted. |
+| `compare_to_handlabels.py` | Scores a held-out video's predictions against hand labels kept in a different project. Suggests a slider threshold and keeps a scoreboard across fine-tunes in `<project>/analysis/`. Add `--full-coverage` when every real bout was painted. |
 
 ## The pixel scale (px/cm) for HiDRA is measured automatically
 
@@ -40,6 +40,20 @@ spread (`iqr`), which is wide because a tilted camera sees the arena at differen
   keep using the mode of the last successful run.
 
 ## Bugs we found and fixed
+
+**Social windows started up to 19 s too early.** Fixed 2026-10-23.
+The QC sheet `asd_session_qc_social` writes entry and exit times as minutes:seconds in a number cell,
+so 9.41 means 9 min 41 s. They were read as decimal minutes (9.41 min is 9 min 24.6 s), and
+`Sheet1` has no frame numbers for these sessions. So most windows began before the partner entered.
+In that time the tracker puts the missing rat's pose on top of the tethered rat, which looks like
+contact, and those frames were offered as candidates. `import_social_window.py` now reads only the
+main sheet as minutes:seconds. Its frames match the `partner_present` record in ugne_clusters exactly.
+
+**Day 2 to 5 poses stopped at frame 60000.** Fixed 2026-10-23.
+`dannce_to_slp.py` always read `sDANNCE/predict01`. On the day 2 to 5 sessions that file only covers
+the first 60000 frames, while `predict02` holds the same poses for the whole session. The partner is in
+the arena until about frame 79000, so a third of the social time had no poses. HiDRA still scored those
+empty frames, and all-frames fine-tunes counted them as "no". The script now prefers `predict02`.
 
 **Changing the review rate undid the fine-tune.** Fixed 2026-10-20.
 Editing the "review rate" box or the "scores" menu saved a new copy of the head's settings. That copy

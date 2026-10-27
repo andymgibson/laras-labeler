@@ -104,10 +104,24 @@ def write_scale_sidecar(slp_out: Path, est: dict, width: int, height: int, camer
     return path
 
 
+def default_mat(cage_dir: Path) -> str:
+    """The sDANNCE output to use: predict02 when it exists, else predict01.
+
+    Some sessions have both. predict01 can stop partway (60000 of 105000 frames on the day 2-5
+    sessions), while predict02 holds the same poses for the whole recording."""
+    for name in ("predict02", "predict01"):
+        rel = f"sDANNCE/{name}/save_data_AVG0.mat"
+        if (cage_dir / rel).exists():
+            return rel
+    raise SystemExit(f"no sDANNCE/predict02 or predict01 save_data_AVG0.mat under {cage_dir}")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("cage_dir", help="e.g. .../day1/cage1RB")
-    ap.add_argument("--mat", default="sDANNCE/predict01/save_data_AVG0.mat")
+    ap.add_argument("--mat", default=None,
+                    help="pose file relative to cage_dir (default: sDANNCE/predict02/save_data_AVG0.mat, "
+                         "or predict01 when there is no predict02)")
     ap.add_argument("--calib", default="calibration/calibration.json")
     ap.add_argument("--camera", default="Camera1")
     ap.add_argument("--out", default=None, help="output .slp path")
@@ -118,6 +132,8 @@ def main():
     args = ap.parse_args()
 
     cage_dir = Path(args.cage_dir)
+    args.mat = args.mat or default_mat(cage_dir)
+    print(f"poses from {cage_dir / args.mat}")
     cal = json.load(open(cage_dir / args.calib))
     cam_idx = cal["camera_names"].index(args.camera)
     cam_params = cal["camera_params"][cam_idx]
