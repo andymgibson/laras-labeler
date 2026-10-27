@@ -107,6 +107,34 @@ Things to keep in mind:
 Every fine-tune starts from HiDRA's published weights, never from an earlier fine-tune. So a run can
 only learn from the clips in its own manifest.
 
+## Browsing the model's detections (read only)
+
+**👁 Browse detections** (step ④, next to Review candidates) plays the model's bouts on the open clip
+one at a time. It is for getting a feel for the model on a held-out clip. You cannot accept, reject or
+trim anything.
+
+1. Open the clip, pick the behavior and the actor's track (track 2 for approach). Run Predict first if
+   the clip has no predictions.
+2. Pick what to step through.
+   - all detections
+   - detections on your labels (they overlap a frame you labeled Happening)
+   - detections with no label (they overlap no Happening frame)
+   - your bouts it missed (Happening bouts no detection touches)
+3. Pick the order: time, highest score, lowest score or random. Random gives a fair sample if you only
+   watch a few.
+4. Pick the labels to compare with. Clip 0's hand labels live in the separate `cage1rb_day1` project, so
+   choose "labels: cage1RB_day1 · approach" there. Another project is offered only if its clip has the
+   same name, length, frame size, fps and social window. Its labels are read and never changed.
+5. Keys: ⏎ next, Shift+⏎ back, r replay, ← → scrub, space play, Esc done.
+
+Bouts are found the same way as the timeline lane. That means the detect slider, min bout, 5-frame
+smoothing and a 3-frame gap bridge, all inside the social window. Moving the slider rebuilds the list.
+
+While browsing, the GUI refuses every write. Painting, undo, delete, trim, Train, Predict, Review and
+Import show "read only" instead. The page also blocks any other write request to the server except the
+event log and the detect slider. Browsing logs only `browse_*` events and never `candidate_accept` or
+`candidate_reject`, so the review-precision numbers in the metrics notebook are unaffected.
+
 ## Bugs we found and fixed
 
 **Social windows started up to 19 s too early.** Fixed 2026-10-23.
