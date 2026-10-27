@@ -310,6 +310,10 @@
     <!-- ③ Train -->
     <span class="stg">③ Train</span>
     <button id="train" class="primary">⚙ Train</button>
+    <label class="status" style="display:inline-flex; align-items:center; gap:4px"
+           title="Keep THIS clip out of every training run, for example a test video. Its labels stay. You can still Predict and review it. HiDRA fine-tune and the project's own Train both skip it. Each fine-tune's manifest.json lists it under held_out_clips.">
+      <input type="checkbox" id="holdOutClip"> hold this clip out of training
+    </label>
     <select id="featSet" title="Which features this behavior's model is trained on. A lean set can beat the full one (e.g. drinking does better on spout-only — pose/social features overfit). Retrain to apply.">
       <option value="all">All features</option>
       <option value="spout">Spout only</option>
@@ -345,6 +349,12 @@
       <label class="status" for="hidraRate">review rate:</label>
       <input type="number" id="hidraRate" value="0.15" min="0.01" max="0.9" step="0.01" style="width:58px"
              title="Fraction of frames to offer as review candidates. HiDRA's probabilities are not on this GUI's 0.6 candidate scale out of domain, so they are rescaled monotonically (ranking untouched) to put this fraction above the cut. Set it AT OR ABOVE the behavior's prevalence — below that, no rate can surface most bouts however good the head is.">
+      <label class="status" for="hidraTrainOn">train on:</label>
+      <select id="hidraTrainOn" title="Which frames the next ⚙ HiDRA fine-tune learns from.&#10;Every frame: anything you did not mark yes counts as NO, including time outside the social window and real approaches you never saw.&#10;Inside the social window: the same, but frames outside each clip's social window are left out.&#10;Reviewed frames only: only the yes and no answers you gave. Every other frame counts as neither.&#10;The last two need the HiDRA reviewed-frames patch (see lab_scripts/README.md).">
+        <option value="all">every frame</option>
+        <option value="window">inside social window</option>
+        <option value="reviewed">reviewed frames only</option>
+      </select>
       <label class="status" for="hidraFps">fps:</label>
       <input type="number" id="hidraFps" min="0.1" max="1000" step="0.1" placeholder="fps" style="width:62px"
              title="Frame rate for THIS clip. Read from the container at import, and containers can be wrong — ours declares 30 for 50 fps video. HiDRA's features are in centimetres and SECONDS, so a wrong rate puts every speed and duration out by the same factor and reads as a bad classifier rather than a bad number.&#10;Changing it rebuilds this clip's feature cache, because the labeler's own feature windows are specified in seconds too.">
@@ -2100,19 +2110,62 @@ function hidraSyncBehavior() {
     el("hidraCollapse").value = h.collapse || "scene";
     el("hidraRate").value = h.rate ?? 0.15;
   }
+  el("hidraTrainOn").value = !h ? "all" : h.train_on || (h.reviewed_only ? "reviewed" : "all");
   hidraReflect();
+}
+
+const TRAIN_ON = { all: "every frame", window: "inside the social window", reviewed: "reviewed frames only" };
+
+async function hidraSaveTrainOn() {
+  if (!HIDRA || activeBid == null) return;
+  const b = (behaviors || []).find(x => x.id === activeBid);
+  const before = (b && b.hidra && b.hidra.train_on) || "all", on = el("hidraTrainOn").value;
+  const r = await api(`/behaviors/${activeBid}/hidra/options`, {
+    method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ train_on: on }) });
+  if (!r.ok) {
+    el("hidraTrainOn").value = before;
+    busy("could not save: " + ((await r.json().catch(() => ({}))).detail || r.status));
+    return;
+  }
+  if (b) b.hidra = await r.json();
+  logEvent("hidra_train_on_set", { behavior_id: activeBid, train_on: on });
+  busy(`next fine-tune trains on ${TRAIN_ON[on]}`);
+  hidraReflect();
+}
+
+async function saveHoldOut() {
+  if (!vid) return;
+  const on = el("holdOutClip").checked, clip = vid;
+  const r = await api(`/videos/${clip}/training`, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ exclude: on }) });
+  if (!r.ok) {
+    el("holdOutClip").checked = !on;
+    busy("could not save: " + ((await r.json().catch(() => ({}))).detail || r.status));
+    return;
+  }
+  for (const v of (projMeta && projMeta.videos) || []) if (v.video_id === clip) v.exclude_from_training = on;
+  if (meta && meta.video_id === clip) meta.exclude_from_training = on;
+  logEvent("clip_training_set", { video_id: clip, exclude: on });
+  busy(on ? `${clipShortName(clip)} is held out: no training run will use its labels`
+          : `${clipShortName(clip)} is back in training`);
+  renderClipBar();
 }
 
 // One place decides what the controls and the two buttons say, so the GUI can never claim it will
 // run HiDRA when the behavior is unbound, or offer inference the runtime cannot do.
 function hidraReflect() {
   const pick = hidraPick(), bound = !!pick;
-  for (const id of ["hidraCollapse", "hidraRate"]) el(id).disabled = !bound;
+  for (const id of ["hidraCollapse", "hidraRate", "hidraTrainOn"]) el(id).disabled = !bound;
 
   // Once this behavior's head has been fine-tuned on reviewed labels it stops being the shipped
   // zero-shot head — a Predict now loads the adapted weights — so the label must say so.
   const beh = behaviors.find(x => x.id === activeBid);
-  const ftMode = beh && beh.hidra && beh.hidra.weights ? (beh.hidra.finetune_mode || "fine-tuned") : null;
+  const ftMode = beh && beh.hidra && beh.hidra.weights
+    ? (beh.hidra.finetune_mode || "fine-tuned")
+      + (TRAIN_ON[beh.hidra.weights_train_on || (beh.hidra.weights_reviewed_only ? "reviewed" : "")]
+         ? ", " + TRAIN_ON[beh.hidra.weights_train_on || "reviewed"] : "")
+    : null;
 
   const predict = el("predict"), train = el("train");
   const ppc = parseFloat(el("hidraPpc").value);
@@ -2363,6 +2416,7 @@ async function hidraInit() {
     hidraSave();
   };
   for (const id of ["hidraCollapse", "hidraRate"]) el(id).onchange = hidraSave;
+  el("hidraTrainOn").onchange = hidraSaveTrainOn;
   el("hidraPpc").onchange = hidraSaveScale;
   el("hidraFps").onchange = hidraSaveFps;
   el("dirToggle").onchange = async () => {   // mark this behavior directed (actor->target) — no classifier needed
@@ -2401,15 +2455,21 @@ function clipShortName(vidId) {
 function renderClipBar() {
   const bar = el("clipBar"); if (!bar) return; bar.innerHTML = "";
   const vids = (projMeta && projMeta.videos) || [];
+  if (el("holdOutClip")) el("holdOutClip").checked = !!(meta && meta.exclude_from_training);
   if (vids.length < 1) { bar.style.display = "none"; return; }
   bar.style.display = "";
   const lab = document.createElement("span"); lab.className = "status"; lab.textContent = "Clip:"; bar.appendChild(lab);
   for (const v of vids) {
     const chip = document.createElement("button");
     chip.className = "chip" + (v.video_id === vid ? " active" : "");
-    chip.title = v.video_id;
+    chip.title = v.video_id + (v.exclude_from_training ? " · held out of training" : "");
     chip.onclick = () => { if (v.video_id !== vid) openVideo(v.video_id); };
     const name = document.createElement("span"); name.textContent = clipShortName(v.video_id); chip.appendChild(name);
+    if (v.exclude_from_training) {
+      const tag = document.createElement("span"); tag.textContent = "held out";
+      tag.style.cssText = "margin-left:6px; font-size:10px; opacity:.75; border:1px solid currentColor; border-radius:3px; padding:0 3px";
+      chip.appendChild(tag);
+    }
     const x = document.createElement("span"); x.textContent = "✕";
     x.title = "Remove this clip from the project"; x.style.cssText = "margin-left:7px; opacity:.5; font-size:11px";
     x.onmouseenter = () => x.style.opacity = "1"; x.onmouseleave = () => x.style.opacity = ".5";
@@ -3140,7 +3200,9 @@ async function train() {
   // Scope the post-fit prediction sweep (the fit itself always pools every labeled clip). Sweeping a
   // 17-clip project costs minutes; re-predicting just the clip under review costs seconds.
   const scope = (el("trainScope") || {}).value === "all" ? "" : `?predict_videos=${encodeURIComponent(vid)}`;
-  logEvent("train_click", { behavior_id: bid, name: bname, scope: scope ? "this clip" : "all clips" });
+  const bh = (behaviors.find(x => x.id === bid) || {}).hidra;
+  logEvent("train_click", { behavior_id: bid, name: bname, scope: scope ? "this clip" : "all clips",
+                            train_on: bh && bh.action ? (bh.train_on || (bh.reviewed_only ? "reviewed" : "all")) : null });
   const r = await api(`/behaviors/${bid}/train${scope}`, { method: "POST" });
   if (!r.ok) { const d = (await r.json()).detail; logEvent("train_error", { behavior_id: bid, name: bname, error: String(d).slice(0, 200) }); busy("train error: " + d); return; }
   const { job_id } = await r.json();
@@ -3171,7 +3233,9 @@ async function train() {
       // Detect it by its own fields (lab+action) rather than the mode name — the PyTorch rewrite
       // renamed the LABTAIL modes to tail/head/embedding, so `mode === "labtail"` no longer matched.
       // A smoke run writes no checkpoint; a real run records weights and only applies on the next Predict.
-      const from = r.videos ? ` from ${r.videos} clip${r.videos === 1 ? "" : "s"}` : "";
+      const held = (r.held_out || []).length ? ` · held out: ${r.held_out.map(clipShortName).join(", ")}` : "";
+      const from = (r.videos ? ` from ${r.videos} clip${r.videos === 1 ? "" : "s"}` : "")
+        + (r.train_on && r.train_on !== "all" ? ` · ${TRAIN_ON[r.train_on]}` : "") + held;
       if (r.smoke) {
         busy(`Smoke test OK — prepare + train ran for ${r.action} (${r.lab}) on ${r.bouts} `
           + `reviewed bout${r.bouts === 1 ? "" : "s"}${from} · ${r.backend} · no checkpoint written `
@@ -3873,6 +3937,7 @@ el("toolPaint").onclick = () => setTool("paint");
 el("toolSelect").onclick = () => setTool("select");
 el("delSeg").onclick = deleteSelectedSeg;
 el("train").onclick = train; el("predict").onclick = predictVideo; el("importBtn").onclick = importFile; el("review").onclick = startReview;
+el("holdOutClip").onchange = saveHoldOut;
 el("predThresh").oninput = onThreshInput;
 el("predThresh").onchange = onThreshCommit;
 el("predMinBout").onchange = onMinBoutChange;

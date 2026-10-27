@@ -13,6 +13,7 @@ is ours; upstream never touches this folder, so pulling Lara's updates cannot co
 | `review_stats.py` | Precision of a head's proposals from your accept and reject decisions in review. |
 | `characterize_approach_head.py` | ROC, precision-recall and review precision over time for every video in a project, scored against that project's own labels. |
 | `compare_to_handlabels.py` | Scores a held-out video's predictions against hand labels kept in a different project. Suggests a slider threshold and keeps a scoreboard across fine-tunes in `<project>/analysis/`. Add `--full-coverage` when every real bout was painted. |
+| `hidra_patches/` | Changes to HiDRA that the labeler needs. Right now only `reviewed-frames-only.patch` (see below). |
 
 ## The pixel scale (px/cm) for HiDRA is measured automatically
 
@@ -38,6 +39,73 @@ spread (`iqr`), which is wide because a tilted camera sees the arena at differen
 - `HIDRA_GPU=<n>` picks the GPU for HiDRA jobs. Set it when you start the labeler.
 - `?ft_mode=head` (or `tail`, `embedding`) on the train route picks the fine-tune mode. Later re-tunes
   keep using the mode of the last successful run.
+- **Train on** (menu next to the HiDRA review rate): every frame, inside the social window, or
+  reviewed frames only. See below.
+- **Hold this clip out of training** (checkbox next to ⚙ Train). Use it for test videos. The clip keeps
+  its labels and can still be predicted and reviewed. Every training run skips it, HiDRA fine-tune and
+  the project's own Train alike. Its tab in the clip bar says "held out".
+- **Every fine-tune is kept.** A finished run goes to `<project>/hidra/runs/<date>_<time>__<lab>__<action>/`
+  with its checkpoints, the exact spans sent to HiDRA (`bouts.csv`, `reviewed.csv`), HiDRA's full log
+  (`hidra_log.txt`) and `manifest.json`. The manifest lists every clip the run trained on and every clip
+  it skipped, with the reason. Predict uses the newest run. To go back to an older one, point the
+  behavior's `weights` in `project.json` at that run's `models/` (stop the labeler first).
+
+## Choosing which frames a fine-tune learns from
+
+The "train on" menu has three choices. The run's `manifest.json` records which one was used.
+
+- **every frame** (the old behavior): see the next paragraph.
+- **inside social window**: the same, but only frames inside each clip's social window. Time when
+  only one rat is in the arena is left out.
+- **reviewed frames only**: only the frames you answered yes or no.
+
+By default HiDRA counts every frame you did not mark as an approach as a "no". That includes real
+approaches the model never showed you. It also includes the time before and after the social window. With
+**reviewed frames only** chosen, the next fine-tune learns from the frames you answered and nothing
+else. Accepted candidates are the yeses. Rejected candidates are the nos. Frames marked Unknown and
+frames you never looked at are left out. A clip whose candidates you all rejected still counts, since
+its nos are real information.
+
+The last two need a small change to HiDRA that the labeler checks for. It is in `hidra_patches/`. To put it
+on a fresh HiDRA checkout:
+
+```bash
+cd ~/HiDRA
+git checkout -b reviewed-frames-only
+git apply ~/code/AndysAnnotator/lab_scripts/hidra_patches/reviewed-frames-only.patch
+.venv/bin/python -m pytest -q tests/test_reviewed_frames.py     # 9 tests should pass
+```
+
+Without the patch, those two choices stop with a message that says so. With "every frame" HiDRA
+behaves exactly as before. The run's `hidra_log.txt` lists the number of reviewed
+frames for each clip. Its `[REVIEWED]` lines give the total each model trained on.
+
+Things to keep in mind:
+
+- The nos you gave were mostly rejected candidates, so they are hard cases. The model sees no easy
+  "rats far apart" frames this way. Compare it on the held-out video before trusting it.
+- HiDRA keeps about 15% of the staged clips out of each of its 5 models for validation (2 of 9 clips
+  per model in our runs, a different pair for each). Each `[LABTAIL]` line in `hidra_log.txt` says which.
+  This happens in both modes.
+
+## Checking that a clip was never trained on
+
+1. In the GUI the clip's tab says "held out". When the clip is open, "hold this clip out of training" is ticked.
+2. Look in `<project>/labels/`. A clip with no `<clip>.parquet` there has no labels in this project, so
+   there is nothing of it to train on.
+3. Open the run folder in `<project>/hidra/runs/`. In `manifest.json` the clip must be under
+   `held_out_clips` (or `skipped_clips`) and not under `trained_clips`. `bouts.csv` and `reviewed.csv`
+   name every file sent to HiDRA. Clip `0` would appear as `0.parquet` and clip `0-11` as `0-11_0.parquet`.
+
+   ```bash
+   cd ~/my-projects/approach_defs/hidra/runs/<run>
+   grep -c "^0\.parquet\|^0-11_0\.parquet" bouts.csv reviewed.csv      # both should print 0
+   ```
+4. The server event log `<project>/events/server.jsonl` has a `job_done` line for every train job. Since
+   2026-10-23 it lists the `clips` used and the `held_out` ones.
+
+Every fine-tune starts from HiDRA's published weights, never from an earlier fine-tune. So a run can
+only learn from the clips in its own manifest.
 
 ## Bugs we found and fixed
 
@@ -54,6 +122,11 @@ main sheet as minutes:seconds. Its frames match the `partner_present` record in 
 the first 60000 frames, while `predict02` holds the same poses for the whole session. The partner is in
 the arena until about frame 79000, so a third of the social time had no poses. HiDRA still scored those
 empty frames, and all-frames fine-tunes counted them as "no". The script now prefers `predict02`.
+
+**A failed fine-tune deleted the model in use.** Fixed 2026-10-23.
+Each fine-tune first emptied `hidra/_finetune/<lab>__<action>/`. The current checkpoint lived in that
+same folder. So a run that crashed partway left Predict pointing at files that were gone. Finished
+runs now live in their own folders under `hidra/runs/` and the next run cannot touch them.
 
 **Changing the review rate undid the fine-tune.** Fixed 2026-10-20.
 Editing the "review rate" box or the "scores" menu saved a new copy of the head's settings. That copy
